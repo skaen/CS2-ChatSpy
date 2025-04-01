@@ -1,11 +1,17 @@
 ﻿using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Admin;
-using CounterStrikeSharp.API.Modules.Entities;
+using CounterStrikeSharp.API.Core.Attributes;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Core.Capabilities;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
+using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Modules.Timers;
 using System.Text.Json.Serialization;
 
 namespace ChatSpy;
+
 public class ConfigGen : BasePluginConfig
 {
     [JsonPropertyName("OnlySpectators")]
@@ -19,10 +25,11 @@ public class ConfigGen : BasePluginConfig
     [JsonPropertyName("ColorSPEC")]
     public string ColorSPEC { get; set; } = "{GRAY}";
 }
+
 public class ChatSpy : BasePlugin, IPluginConfig<ConfigGen>
 {
     public override string ModuleName => "Chat Spy";
-    public override string ModuleVersion => "1.0.8";
+    public override string ModuleVersion => "1.0.9";
     public override string ModuleAuthor => "skaen";
     public required ConfigGen Config { get; set; }
     public void OnConfigParsed(ConfigGen config)
@@ -30,45 +37,47 @@ public class ChatSpy : BasePlugin, IPluginConfig<ConfigGen>
         Config = config;
     }
 
-    public override void Load(bool hotReload)
+    public override void OnAllPluginsLoaded(bool hotReload)
     {
-        RegisterEventHandler<EventPlayerChat>(((@event, info) =>
+        RegisterEventHandler<EventPlayerChat>(EventPlayerChat);
+    }
+    
+    public HookResult EventPlayerChat(EventPlayerChat @event, GameEventInfo info)
+    {
+        var message = @event.Text.Trim();
+        var player = Utilities.GetPlayerFromUserid(@event.Userid);
+        
+        if (player == null || !player.IsValid || player.IsBot || message == null)
+            return HookResult.Continue;
+        
+        if (@event.Teamonly)
         {
-            var message = @event.Text.Trim();
-            var player = Utilities.GetPlayerFromUserid(@event.Userid);
-
-            if (player == null || !player.IsValid || player.IsBot || message == null)
-                return HookResult.Continue;
-
-            if (@event.Teamonly)
+            var isPlayerAlive = player.PawnIsAlive ? "" : "*DEAD*";
+            var team = (CsTeam)player.TeamNum switch
             {
-                var isPlayerAlive = player.PawnIsAlive ? "" : "*DEAD*";
-                var team = (CsTeam)player.TeamNum switch
-                {
-                    CsTeam.Terrorist => $"{Config.ColorT}(Terrorist)",
-                    CsTeam.CounterTerrorist => $"{Config.ColorCT}(Counter-Terrorist)",
-                    CsTeam.Spectator => $"{Config.ColorSPEC}(SPEC)",
-                    _ => "NONE"
-                };
+                CsTeam.Terrorist => $"{Config.ColorT}(Terrorist)",
+                CsTeam.CounterTerrorist => $"{Config.ColorCT}(Counter-Terrorist)",
+                CsTeam.Spectator => $"{Config.ColorSPEC}(SPEC)",
+                _ => "NONE"
+            };
 
-                var playerEntities = Utilities.GetPlayers();
-                foreach (var admin in playerEntities)
+            var playerEntities = Utilities.GetPlayers();
+            foreach (var admin in playerEntities)
+            {
+                if (AdminManager.PlayerHasPermissions(admin, Config.AdminFlag))
                 {
-                    if (AdminManager.PlayerHasPermissions(admin, Config.AdminFlag))
+                    if (player == admin) continue;
+                    if (Config.OnlySpectators && (CsTeam)player.TeamNum != CsTeam.Spectator) continue;
+                    if (player.TeamNum != admin.TeamNum)
                     {
-                        if (player == admin) continue;
-                        if (Config.OnlySpectators && (CsTeam)player.TeamNum != CsTeam.Spectator) continue;
-                        if (player.TeamNum != admin.TeamNum)
-                        {
-                            var messageTeamColor = ReplaceColorTags(team);
-                            admin.PrintToChat($" {ChatColors.Grey}{isPlayerAlive} {messageTeamColor} {player.PlayerName} : {@event.Text}");
-                        }
+                        var messageTeamColor = ReplaceColorTags(team);
+                        admin.PrintToChat($" {ChatColors.Grey}{isPlayerAlive} {messageTeamColor} {player.PlayerName} : {@event.Text}");
                     }
                 }
-                return HookResult.Continue;
             }
             return HookResult.Continue;
-        }));
+        }
+        return HookResult.Continue;
     }
     private string ReplaceColorTags(string input)
     {
